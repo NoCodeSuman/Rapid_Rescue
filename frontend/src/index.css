@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens mirrored as CSS variables for non-Tailwind consumers (e.g. map overlays). */
+:root {
+  --rr-navy: #0f2344;
+  --rr-brand: #0b84d6;
+  --rr-danger: #e5383b;
+  --rr-success: #16a34a;
+  --rr-warning: #f59e0b;
+  --rr-radius: 0.5rem;
+  --rr-focus: 0 0 0 3px rgba(11, 132, 214, 0.45);
+}
+
+@layer base {
+  html { scroll-behavior: smooth; scroll-padding-top: 4.5rem; }
+  body { @apply bg-surface-muted font-sans text-ink antialiased; }
+  h1, h2, h3, h4 { @apply font-semibold tracking-tight text-navy-900; }
+  :focus-visible { @apply outline-none ring-2 ring-brand-500 ring-offset-2; }
+  dialog { @apply p-0 bg-transparent; }
+  /* Grid/flex children must be allowed to shrink so wide tables scroll inside their own container. */
+  .grid > *, main > * { min-width: 0; }
+  dialog::backdrop { background: rgba(6, 16, 31, 0.55); }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+.leaflet-container { font-family: inherit; z-index: 0; }
+.rr-marker { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:9999px; border:2px solid #fff; color:#fff; font-weight:700; font-size:12px; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+.rr-ambulance-moving-marker { transition: transform 280ms linear; }
+.rr-map-marker-moving { transition: transform 280ms linear; }
+
+.payment-sketch path, .payment-sketch circle { fill: none; stroke: var(--rr-navy); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.payment-sketch__paper { stroke-dasharray: 300; stroke-dashoffset: 300; animation: rr-sketch-draw 850ms cubic-bezier(.2,.7,.2,1) forwards; }
+.payment-sketch__fold, .payment-sketch__line, .payment-sketch__coin, .payment-sketch__currency { stroke-dasharray: 100; stroke-dashoffset: 100; animation: rr-sketch-draw 560ms ease-out 260ms forwards; }
+.payment-sketch__badge { fill: #f0fdf4 !important; stroke: var(--rr-success) !important; stroke-width: 2.5 !important; stroke-dasharray: 145; stroke-dashoffset: 145; transform-box: fill-box; transform-origin: center; animation: rr-sketch-draw 520ms ease-out 720ms forwards, rr-badge-pop 420ms cubic-bezier(.2,.8,.2,1) 720ms both; }
+.payment-sketch__check { stroke: var(--rr-success) !important; stroke-width: 3.4 !important; stroke-dasharray: 36; stroke-dashoffset: 36; animation: rr-sketch-draw 400ms ease-out 1s forwards; }
+.payment-verification-badge { display: inline-flex; align-items: center; gap: .45rem; border: 1px solid #86efac; border-radius: 9999px; background: #f0fdf4; padding: .35rem .75rem; color: #166534; font-size: .7rem; font-weight: 700; letter-spacing: .08em; }
+.payment-verification-badge__dot { display: inline-flex; height: 1.1rem; width: 1.1rem; align-items: center; justify-content: center; border-radius: 9999px; background: #15803d; color: white; font-size: .72rem; line-height: 1; }
+.payment-dismiss-track { height: 2px; width: min(15rem, 80%); overflow: hidden; border-radius: 9999px; background: #e2e8f0; }
+.payment-dismiss-track span { display: block; height: 100%; width: 100%; transform-origin: left; background: #15803d; animation: rr-payment-dismiss 4.5s linear forwards; }
+@keyframes rr-sketch-draw { to { stroke-dashoffset: 0; } }
+@keyframes rr-badge-pop { 0% { transform: scale(.65); opacity: .2; } 75% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes rr-payment-dismiss { to { transform: scaleX(0); } }
+
+
+/* Keep Lucide strokes clean: animate the icon container and active process card, never dash individual SVG paths. */
+.rr-step-card { scroll-margin-top: 5rem; }
+.rr-step-card svg { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }

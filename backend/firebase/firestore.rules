@@ -1,0 +1,204 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    function owner(uid) { return verified() && request.auth.uid == uid; }
+    function hasProfile() { return verified() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function isAdmin() {
+      return hasProfile()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'active';
+    }
+    function isDriver() {
+      return hasProfile()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'active';
+    }
+    function validDriverStatusTransition() {
+      let from = resource.data.status;
+      let to = request.resource.data.status;
+      return (from == 'requested' && to == 'accepted')
+        || (from == 'assigned' && to == 'accepted')
+        || (from == 'accepted' && to == 'on_the_way')
+        || (from == 'on_the_way' && to == 'arrived')
+        || (from == 'arrived' && to == 'in_progress')
+        || (from == 'in_progress' && to == 'completed');
+    }
+    function paymentUtrClaimMatches(utr, bookingId, stage) {
+      let booking = getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data;
+      return booking.payment is map
+        && ((stage == 'upfront' && booking.payment.upfrontUtr == utr)
+          || (stage == 'balance' && booking.payment.balanceUtr == utr));
+    }
+
+    // Trusted Firebase identity/profile. A client cannot promote itself to admin.
+    match /users/{uid} {
+      function validName(v) { return v is string && v.size() >= 2 && v.size() <= 60; }
+      function validPhone(v) { return v is string && (v.size() == 0 || (v.size() <= 19 && v.matches('^\\+?[0-9][0-9 ()-]{6,17}$'))); }
+      function validCreate() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['uid','displayName','phoneNumber','role','accountStatus','createdAt','updatedAt','schemaVersion'])
+          && d.keys().hasAll(['uid','displayName','phoneNumber','role','accountStatus','createdAt','updatedAt','schemaVersion'])
+          && d.uid == uid && d.uid == request.auth.uid && validName(d.displayName) && validPhone(d.phoneNumber)
+          && d.role in ['patient','driver'] && d.accountStatus == 'active'
+          && d.createdAt == request.time && d.updatedAt == request.time && d.schemaVersion == 1;
+      }
+      allow get: if owner(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if signedIn() && request.auth.uid == uid && validCreate();
+      allow update: if owner(uid) && resource.data.accountStatus == 'active'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName','phoneNumber','updatedAt'])
+        && validName(request.resource.data.displayName) && validPhone(request.resource.data.phoneNumber)
+        && request.resource.data.updatedAt == request.time;
+      // An administrator may change a person's name, phone and account status (deactivate / reactivate). Never the role.
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName','phoneNumber','accountStatus','updatedAt'])
+        && validName(request.resource.data.displayName) && validPhone(request.resource.data.phoneNumber)
+        && request.resource.data.accountStatus in ['active','inactive']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /bookings/{bookingId} {
+      allow create: if verified() && request.resource.data.patientFirebaseUid == request.auth.uid
+        && request.resource.data.status == 'requested' && request.resource.data.patientId is string
+        && request.resource.data.payment is map
+        && request.resource.data.payment.keys().hasOnly(['totalInr','upfrontInr','balanceInr','upfrontUtr','upfrontSubmittedAt'])
+        && request.resource.data.payment.keys().hasAll(['totalInr','upfrontInr','balanceInr','upfrontUtr','upfrontSubmittedAt'])
+        && request.resource.data.payment.totalInr is number && request.resource.data.payment.totalInr >= 0
+        && request.resource.data.payment.upfrontInr is number && request.resource.data.payment.upfrontInr >= 0
+        && request.resource.data.payment.balanceInr is number && request.resource.data.payment.balanceInr >= 0
+        && request.resource.data.payment.balanceInr == request.resource.data.payment.totalInr - request.resource.data.payment.upfrontInr
+        && request.resource.data.payment.upfrontUtr is string && request.resource.data.payment.upfrontUtr.matches('^[0-9]{16}$')
+        && request.resource.data.payment.upfrontSubmittedAt is string
+        && existsAfter(/databases/$(database)/documents/paymentUtrs/$(request.resource.data.payment.upfrontUtr))
+        && getAfter(/databases/$(database)/documents/paymentUtrs/$(request.resource.data.payment.upfrontUtr)).data.bookingId == bookingId
+        && getAfter(/databases/$(database)/documents/paymentUtrs/$(request.resource.data.payment.upfrontUtr)).data.stage == 'upfront'
+        && request.resource.data.id == bookingId;
+      allow get, list: if isAdmin()
+        || (verified() && resource.data.patientFirebaseUid == request.auth.uid)
+        || (isDriver() && resource.data.status == 'requested')
+        || (isDriver() && resource.data.driverFirebaseUid == request.auth.uid);
+      allow update: if isAdmin()
+        || (verified() && resource.data.patientFirebaseUid == request.auth.uid
+          && resource.data.status == 'completed'
+          && request.resource.data.status == 'completed'
+          && request.resource.data.patientFirebaseUid == resource.data.patientFirebaseUid
+          && resource.data.payment is map && request.resource.data.payment is map
+          && request.resource.data.payment.totalInr == resource.data.payment.totalInr
+          && request.resource.data.payment.upfrontInr == resource.data.payment.upfrontInr
+          && request.resource.data.payment.balanceInr == resource.data.payment.balanceInr
+          && request.resource.data.payment.upfrontUtr == resource.data.payment.upfrontUtr
+          && resource.data.payment.get('balanceUtr', null) == null
+          && request.resource.data.payment.balanceUtr is string
+          && request.resource.data.payment.balanceUtr.matches('^[0-9]{16}$')
+          && request.resource.data.payment.balanceUtr != resource.data.payment.upfrontUtr
+          && existsAfter(/databases/$(database)/documents/paymentUtrs/$(request.resource.data.payment.balanceUtr))
+          && getAfter(/databases/$(database)/documents/paymentUtrs/$(request.resource.data.payment.balanceUtr)).data.bookingId == bookingId
+          && getAfter(/databases/$(database)/documents/paymentUtrs/$(request.resource.data.payment.balanceUtr)).data.stage == 'balance'
+          && request.resource.data.payment.balanceSubmittedAt is string
+          && request.resource.data.payment.diff(resource.data.payment).affectedKeys().hasOnly(['balanceUtr','balanceSubmittedAt'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment','firestoreUpdatedAt']))
+        || (verified() && resource.data.patientFirebaseUid == request.auth.uid
+          && request.resource.data.patientFirebaseUid == resource.data.patientFirebaseUid
+          && request.resource.data.status == 'cancelled'
+          && resource.data.status in ['requested','assigned','accepted','on_the_way','arrived']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt','reason','history','firestoreUpdatedAt']))
+        || (isDriver() && resource.data.status == 'requested'
+          && request.resource.data.patientFirebaseUid == resource.data.patientFirebaseUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','driverFirebaseUid','driverId','ambulanceId','eta','updatedAt','reason','history','declinedByDriverIds','firestoreUpdatedAt'])
+          && (request.resource.data.driverFirebaseUid == request.auth.uid || request.resource.data.driverFirebaseUid == null)
+          && (request.resource.data.status == resource.data.status || validDriverStatusTransition()))
+        || (isDriver() && resource.data.driverFirebaseUid == request.auth.uid
+          && resource.data.status == 'assigned'
+          && request.resource.data.status == 'requested'
+          && request.resource.data.driverFirebaseUid == null
+          && request.resource.data.patientFirebaseUid == resource.data.patientFirebaseUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','driverFirebaseUid','driverId','ambulanceId','eta','updatedAt','reason','history','declinedByDriverIds','firestoreUpdatedAt']))
+        || (isDriver() && resource.data.driverFirebaseUid == request.auth.uid
+          && resource.data.status in ['assigned','accepted','on_the_way','arrived','in_progress']
+          && request.resource.data.driverFirebaseUid == request.auth.uid
+          && request.resource.data.patientFirebaseUid == resource.data.patientFirebaseUid
+          && validDriverStatusTransition()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','driverFirebaseUid','driverId','ambulanceId','eta','updatedAt','reason','history','declinedByDriverIds','firestoreUpdatedAt']))
+        || (isDriver() && resource.data.driverFirebaseUid == request.auth.uid
+          && resource.data.status == 'on_the_way'
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.driverFirebaseUid == request.auth.uid
+          && request.resource.data.patientFirebaseUid == resource.data.patientFirebaseUid
+          && request.resource.data.driverLocation is map
+          && request.resource.data.driverLocation.lat is number
+          && request.resource.data.driverLocation.lat >= -90 && request.resource.data.driverLocation.lat <= 90
+          && request.resource.data.driverLocation.lng is number
+          && request.resource.data.driverLocation.lng >= -180 && request.resource.data.driverLocation.lng <= 180
+          && request.resource.data.driverLocation.label is string
+          && request.resource.data.driverLocationUpdatedAt is string
+          && (request.resource.data.driverLocationPrevious == null
+            || (request.resource.data.driverLocationPrevious is map
+              && request.resource.data.driverLocationPrevious.lat is number
+              && request.resource.data.driverLocationPrevious.lat >= -90 && request.resource.data.driverLocationPrevious.lat <= 90
+              && request.resource.data.driverLocationPrevious.lng is number
+              && request.resource.data.driverLocationPrevious.lng >= -180 && request.resource.data.driverLocationPrevious.lng <= 180))
+          && (request.resource.data.driverLocationPreviousAt == null || request.resource.data.driverLocationPreviousAt is string)
+          && request.resource.data.firestoreUpdatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['driverLocation','driverLocationUpdatedAt','driverLocationPrevious','driverLocationPreviousAt','firestoreUpdatedAt']));
+      allow delete: if isAdmin();
+    }
+
+    // UTR claims are keyed by the 16-digit UTR, making duplicate payment references globally unique.
+    match /paymentUtrs/{utr} {
+      allow get: if verified();
+      allow list: if false;
+      allow create: if verified()
+        && request.resource.data.keys().hasOnly(['utr','bookingId','stage','createdAt'])
+        && request.resource.data.keys().hasAll(['utr','bookingId','stage','createdAt'])
+        && utr.matches('^[0-9]{16}$')
+        && request.resource.data.utr == utr
+        && request.resource.data.bookingId is string
+        && request.resource.data.stage in ['upfront','balance']
+        && request.resource.data.createdAt == request.time
+        && paymentUtrClaimMatches(utr, request.resource.data.bookingId, request.resource.data.stage)
+        && (isAdmin()
+          || getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.patientFirebaseUid == request.auth.uid);
+      allow update, delete: if false;
+    }
+
+    // Shared operational data. Admins manage inventory, dispatch configuration and records.
+    match /appUsers/{id} { allow read, write: if isAdmin(); }
+    match /patientProfiles/{id} {
+      allow read: if isAdmin() || (verified() && resource.data.userFirebaseUid == request.auth.uid);
+      allow create: if isAdmin() || (verified() && request.resource.data.userFirebaseUid == request.auth.uid);
+      allow update: if isAdmin() || (verified() && resource.data.userFirebaseUid == request.auth.uid && request.resource.data.userFirebaseUid == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+    match /drivers/{id} {
+      allow read: if isAdmin() || (isDriver() && resource.data.userFirebaseUid == request.auth.uid);
+      allow create: if isAdmin() || (isDriver() && request.resource.data.userFirebaseUid == request.auth.uid);
+      allow update: if isAdmin() || (isDriver() && resource.data.userFirebaseUid == request.auth.uid
+        && request.resource.data.userFirebaseUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability','updatedAt','userFirebaseUid','contactName','contactEmail','contactPhone','firestoreUpdatedAt','ambulanceId']));
+      allow delete: if isAdmin();
+    }
+    match /ambulances/{id} {
+      allow read: if verified();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (isDriver() && resource.data.driverId is string
+        && exists(/databases/$(database)/documents/drivers/$(resource.data.driverId))
+        && get(/databases/$(database)/documents/drivers/$(resource.data.driverId)).data.userFirebaseUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['location','updatedAt','availability']));
+    }
+    match /zones/{id} { allow read: if verified(); allow write: if isAdmin(); }
+    match /notifications/{id} {
+      allow read: if isAdmin() || (verified() && resource.data.recipientFirebaseUid == request.auth.uid);
+      allow create: if isAdmin() || (verified() && request.resource.data.recipientFirebaseUid == request.auth.uid);
+      allow update: if isAdmin() || (verified() && resource.data.recipientFirebaseUid == request.auth.uid
+        && request.resource.data.recipientFirebaseUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read','firestoreUpdatedAt']));
+      allow delete: if isAdmin() || (verified() && resource.data.recipientFirebaseUid == request.auth.uid);
+    }
+    match /activity/{id} { allow read, write: if isAdmin(); }
+    match /appSettings/{id} { allow read: if verified(); allow write: if isAdmin(); }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

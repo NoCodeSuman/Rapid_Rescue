@@ -1,0 +1,45 @@
+{
+  "name": "rapidrescue-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:rules": "firebase emulators:exec --config ../backend/firebase/firebase.json --only firestore --project demo-rapidrescue \"vitest run --config vitest.rules.config.ts\"",
+    "emulators": "firebase emulators:start --config ../backend/firebase/firebase.json --only firestore --project demo-rapidrescue"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.9.1",
+    "firebase": "^13.0.0",
+    "framer-motion": "^11.11.17",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.460.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.53.2",
+    "react-router-dom": "^6.28.0",
+    "recharts": "^2.13.3",
+    "sonner": "^1.7.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "@types/leaflet": "^1.9.14",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "firebase-tools": "^15.33.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.5"
+  }
+}
